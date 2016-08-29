@@ -42,4 +42,6 @@
 // You should not need to modify any other files, but reading them might be
 // useful in order to understand how the other methods fit into the overall
 // architecture of the system.
+// ----------------------------------------
+// in common_map.go two for loop, more effecient ways?
 package mapreduce
