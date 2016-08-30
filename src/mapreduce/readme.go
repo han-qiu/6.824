@@ -44,4 +44,6 @@
 // architecture of the system.
 // ----------------------------------------
 // in common_map.go two for loop, more effecient ways?
+// map and reduce not parallel
+// once the call() function fails, the worker will never come to work again
 package mapreduce
