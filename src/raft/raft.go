@@ -41,7 +41,7 @@ func min(a int, b int) int {
 	}
 }
 func timeToCan() time.Duration {
-	return time.Duration(150 + rand.Intn(150))*time.Millisecond
+	return time.Duration(1500 + rand.Intn(150))*time.Millisecond
 }
 func timeToRe() time.Duration {
 	return time.Duration(150 + rand.Intn(150))*time.Millisecond
@@ -203,7 +203,7 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 	} else {
 		reply.VoteGranted = false
 	}
-	fmt.Println(args.CadidateId, "to", rf.me, reply.VoteGranted)
+	DPrintf("%v,%v,%v,%v",args.CadidateId , "RequestVote", rf.me,reply.VoteGranted)
 }
 
 //
@@ -224,6 +224,7 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 // the struct itself.
 //
 func (rf *Raft) sendRequestVote(server int, args RequestVoteArgs, reply *RequestVoteReply) bool {
+	fmt.Println(rf.me,"RequestVote to" ,server, rf.votedFor)
 	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
 	return ok
 }
@@ -395,6 +396,7 @@ func (rf *Raft) Run() {
 		case <-rf.timer.C:
 			rf.mu.Lock()
 			rf.InitCandidate()
+			fmt.Println("candidate",rf.me)
 			rf.mu.Unlock()
 			goto START
 		default:
@@ -404,32 +406,38 @@ func (rf *Raft) Run() {
 		select{
 		case <- rf.timer.C:
 			rf.mu.Lock()
-			fmt.Println("CANDIDATE")
 			resetTimer(rf.timer, timeToRe)
-			fmt.Println("CANDIDATE")
 			rf.currentTerm++
 			rf.votedFor = rf.me
 			rf.mu.Unlock()
 			num := 0
 			index := rf.lastIndex()
 			args := RequestVoteArgs{rf.currentTerm,rf.me,index,rf.log[index].term}
+			
 			for i:=0;i<len(rf.peers);i++ {
 				if i == rf.me {
 					continue
 				}
-				reply := RequestVoteReply{}
-				rf.sendRequestVote(i,args,&reply)
-				if reply.Term > rf.currentTerm {
-					rf.mu.Lock()
-					rf.InitFollower()
-					rf.mu.Unlock()
-					goto START
-				}
+				go func(rf *Raft, i int, args RequestVoteArgs) {
+					reply := RequestVoteReply{}
+					ok := false
+					for {
+						if ok {
+							break
+						}
+						ok = rf.sendRequestVote(i, args, &reply)
+					}
+					if reply.Term > rf.currentTerm {
+						rf.mu.Lock()
+						rf.InitFollower()
+						rf.mu.Unlock()
+					}
+				}(rf, i, args)
 				if reply.VoteGranted {
 					num++
 				}
 			}
-			if 2*num > len(rf.peers) {
+			if 2*num +1 >= len(rf.peers) {
 				rf.mu.Lock()
 				rf.InitLeader()
 				rf.mu.Unlock()
