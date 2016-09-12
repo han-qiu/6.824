@@ -16,17 +16,48 @@ type ViewServer struct {
 	rpccount int32 // for testing
 	me       string
 
-
 	// Your declarations here.
+	currentView View
+	ack 	 	bool
+	recentPing	map[string]time.Time
+	mDead		map[string]bool
 }
 
 //
 // server Ping RPC handler.
 //
 func (vs *ViewServer) Ping(args *PingArgs, reply *PingReply) error {
-
+	vs.mu.Lock()
+	defer vs.mu.Unlock()
 	// Your code here.
-
+	if args.Me == vs.currentView.Primary && args.Viewnum == vs.currentView.Viewnum {
+		vs.ack = true
+	}
+	vs.recentPing[args.Me] = time.Now()
+	vs.mDead[args.Me] = false
+	if args.Viewnum == 0 {
+		if vs.currentView.Primary == args.Me {
+			vs.mDead[args.Me] = true
+			vs.currentView.Primary = vs.currentView.Backup
+			vs.currentView.Backup = ""
+			vs.currentView.Viewnum++
+			vs.ack = true
+			vs.getNewB()
+		}else if vs.currentView.Primary == "" {
+			if vs.ack {
+				vs.currentView.Primary = args.Me
+				vs.currentView.Viewnum++
+				vs.ack = true
+			}
+		} else if vs.currentView.Backup == "" && vs.currentView.Primary != args.Me {
+			if vs.ack {
+				vs.currentView.Backup = args.Me
+				vs.currentView.Viewnum++
+				vs.ack = false
+			}
+		}
+	}
+	reply.View = vs.currentView
 	return nil
 }
 
@@ -34,9 +65,10 @@ func (vs *ViewServer) Ping(args *PingArgs, reply *PingReply) error {
 // server Get() RPC handler.
 //
 func (vs *ViewServer) Get(args *GetArgs, reply *GetReply) error {
-
+	vs.mu.Lock()
+	defer vs.mu.Unlock()
 	// Your code here.
-
+	reply.View = vs.currentView
 	return nil
 }
 
@@ -46,9 +78,38 @@ func (vs *ViewServer) Get(args *GetArgs, reply *GetReply) error {
 // if servers have died or recovered, and change the view
 // accordingly.
 //
+func (vs *ViewServer) getNewB() {
+	for m, _ := range vs.mDead {
+		if !vs.mDead[m] && m != vs.currentView.Primary {
+			vs.currentView.Backup = m
+			break
+		}
+	}
+}
 func (vs *ViewServer) tick() {
-
 	// Your code here.
+	vs.mu.Lock()
+	defer vs.mu.Unlock()
+	for m, _ :=range vs.mDead {
+		if time.Since(vs.recentPing[m]) > DeadPings*PingInterval {
+			vs.mDead[m] = true
+			// update view only if ack
+			if vs.ack {
+				if m == vs.currentView.Primary {
+					vs.currentView.Primary = vs.currentView.Backup
+					vs.currentView.Backup = ""
+					vs.currentView.Viewnum++
+					vs.ack = false
+					vs.getNewB()
+				} else if m == vs.currentView.Backup {
+					vs.currentView.Backup = ""
+					vs.currentView.Viewnum++
+					vs.ack = false
+					vs.getNewB()
+				}
+			}
+		}
+	}
 }
 
 //
@@ -77,7 +138,9 @@ func StartServer(me string) *ViewServer {
 	vs := new(ViewServer)
 	vs.me = me
 	// Your vs.* initializations here.
-
+	vs.recentPing = make(map[string]time.Time)
+	vs.mDead = make(map[string]bool)
+	vs.ack = true
 	// tell net/rpc about our RPC server and handlers.
 	rpcs := rpc.NewServer()
 	rpcs.Register(vs)
