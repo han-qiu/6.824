@@ -23,12 +23,21 @@ type ViewServer struct {
 	mDead		map[string]bool
 }
 
+func (vs *ViewServer) PromoteBackup() {
+	if vs.currentView.Backup != "" {
+		vs.currentView.Primary = vs.currentView.Backup
+		vs.currentView.Backup = ""
+		vs.currentView.Viewnum++
+	}
+
+}
 //
 // server Ping RPC handler.
 //
 func (vs *ViewServer) Ping(args *PingArgs, reply *PingReply) error {
 	vs.mu.Lock()
 	defer vs.mu.Unlock()
+	fmt.Println("ping", vs.currentView.Primary)
 	// Your code here.
 	if args.Me == vs.currentView.Primary && args.Viewnum == vs.currentView.Viewnum {
 		vs.ack = true
@@ -37,12 +46,13 @@ func (vs *ViewServer) Ping(args *PingArgs, reply *PingReply) error {
 	vs.mDead[args.Me] = false
 	if args.Viewnum == 0 {
 		if vs.currentView.Primary == args.Me {
-			vs.mDead[args.Me] = true
-			vs.currentView.Primary = vs.currentView.Backup
-			vs.currentView.Backup = ""
-			vs.currentView.Viewnum++
-			vs.ack = true
-			vs.getNewB()
+			if vs.currentView.Backup != "" {
+				vs.mDead[args.Me] = true
+				vs.PromoteBackup()
+				vs.ack = true
+				vs.getNewB()
+			}
+
 		}else if vs.currentView.Primary == "" {
 			if vs.ack {
 				vs.currentView.Primary = args.Me
@@ -96,9 +106,7 @@ func (vs *ViewServer) tick() {
 			// update view only if ack
 			if vs.ack {
 				if m == vs.currentView.Primary {
-					vs.currentView.Primary = vs.currentView.Backup
-					vs.currentView.Backup = ""
-					vs.currentView.Viewnum++
+					vs.PromoteBackup()
 					vs.ack = false
 					vs.getNewB()
 				} else if m == vs.currentView.Backup {
