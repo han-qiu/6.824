@@ -27,9 +27,7 @@ func (vs *ViewServer) PromoteBackup() {
 	if vs.currentView.Backup != "" {
 		vs.currentView.Primary = vs.currentView.Backup
 		vs.currentView.Backup = ""
-		vs.currentView.Viewnum++
 	}
-
 }
 //
 // server Ping RPC handler.
@@ -43,22 +41,23 @@ func (vs *ViewServer) Ping(args *PingArgs, reply *PingReply) error {
 	}
 	vs.recentPing[args.Me] = time.Now()
 	vs.mDead[args.Me] = false
+	// Elect Primary 
+	// Change Primary
+	// Change Backup
 	if args.Viewnum == 0 {
-		if vs.currentView.Primary == args.Me {
-			if vs.currentView.Backup != "" {
-				vs.mDead[args.Me] = true
-				vs.PromoteBackup()
-				vs.ack = true
-				vs.getNewB()
-			}
-
-		}else if vs.currentView.Primary == "" {
-			if vs.ack {
+		if vs.currentView.Primary == "" {
 				vs.currentView.Primary = args.Me
 				vs.currentView.Viewnum++
-				vs.ack = true
+				vs.ack = false
+		} else if vs.currentView.Primary == args.Me {
+			if vs.currentView.Backup != "" && vs.ack{
+				vs.mDead[args.Me] = true
+				vs.PromoteBackup()
+				vs.getNewB()
+				vs.currentView.Viewnum++
+				vs.ack = false
 			}
-		} else if vs.currentView.Backup == "" && vs.currentView.Primary != args.Me {
+		} else if vs.currentView.Backup == ""  {
 			if vs.ack {
 				vs.currentView.Backup = args.Me
 				vs.currentView.Viewnum++
@@ -97,28 +96,29 @@ func (vs *ViewServer) getNewB() {
 }
 func (vs *ViewServer) tick() {
 	// Your code here.
+	// If Someone dead, get rid of it
 	vs.mu.Lock()
 	defer vs.mu.Unlock()
-	for m, _ :=range vs.mDead {
+	for m, _ := range vs.mDead {
 		if time.Since(vs.recentPing[m]) > DeadPings*PingInterval {
 			vs.mDead[m] = true
+		}
+	}
 			// update view only if ack
-			if vs.ack {
-				if m == vs.currentView.Primary {
-					vs.PromoteBackup()
-					vs.ack = false
-					vs.getNewB()
-				} else if m == vs.currentView.Backup {
-					vs.currentView.Backup = ""
-					vs.currentView.Viewnum++
-					vs.ack = false
-					vs.getNewB()
-				}
-			}
+	if vs.ack {
+		if vs.mDead[vs.currentView.Primary] {
+			vs.PromoteBackup()
+			vs.getNewB()
+			vs.currentView.Viewnum++
+			vs.ack = false
+		} else if vs.currentView.Backup == "" || vs.mDead[vs.currentView.Backup] {
+			vs.currentView.Backup = ""
+			vs.getNewB()
+			vs.currentView.Viewnum++
+			vs.ack = false
 		}
 	}
 }
-
 //
 // tell the server to shut itself down.
 // for testing.
@@ -147,7 +147,6 @@ func StartServer(me string) *ViewServer {
 	// Your vs.* initializations here.
 	vs.recentPing = make(map[string]time.Time)
 	vs.mDead = make(map[string]bool)
-	vs.ack = true
 	// tell net/rpc about our RPC server and handlers.
 	rpcs := rpc.NewServer()
 	rpcs.Register(vs)

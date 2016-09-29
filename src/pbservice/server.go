@@ -1,5 +1,7 @@
 package pbservice
 
+// How to ensure kvs are not lost while Primary shifts?
+// twice forward?
 import "net"
 import "fmt"
 import "net/rpc"
@@ -12,6 +14,8 @@ import "os"
 import "syscall"
 import "math/rand"
 
+import "errors"
+
 
 
 type PBServer struct {
@@ -22,25 +26,107 @@ type PBServer struct {
 	me         string
 	vs         *viewservice.Clerk
 	// Your declarations here.
+	currentView	viewservice.View
+	kvs			map[string]string
+	history		map[int64]bool
 }
 
 
 func (pb *PBServer) Get(args *GetArgs, reply *GetReply) error {
 
 	// Your code here.
-
+	// There is no duplicate for get, 
+	// for that get may fail and retry due to network problems
+	pb.mu.Lock()
+	defer pb.mu.Unlock()
+	if pb.currentView.Primary != pb.me {
+		reply.Err = ErrWrongServer
+	} else {
+		// This is tricky, Forward nothing to Backup to check
+		reply.Err = OK
+		if pb.currentView.Backup != "" {
+			Fargs := ForwardArgs{make(map[string]string),make(map[int64]bool)}
+			Freply := ForwardReply{}
+			ok := call(pb.currentView.Backup,"PBServer.ProcessForward",Fargs,&Freply)
+			if !ok {
+				return errors.New("Get Can't connect to Backup")
+			}
+			reply.Err = Freply.Err
+		}
+		if reply.Err == OK {
+			value, ok := pb.kvs[args.Key]
+			if !ok {
+				reply.Err = ErrNoKey
+				reply.Value = ""
+			} else {
+				reply.Value = value
+			}
+		}
+	}
 	return nil
 }
 
 
 func (pb *PBServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) error {
-
+	// fmt.Println(pb.kvs["1"])
 	// Your code here.
-
-
+	pb.mu.Lock()
+	defer pb.mu.Unlock()
+	// Dup
+	if pb.history[args.Count] {
+		reply.Err = DuplicateMsg
+		return nil
+	}
+	if pb.currentView.Primary != pb.me {
+		reply.Err = ErrWrongServer
+	} else {
+		var value string
+		if args.Op == "Put" {
+			value = args.Value
+		} else {
+			value = pb.kvs[args.Key] + args.Value
+		}
+		reply.Err = OK
+		kvs := make(map[string]string)
+		kvs[args.Key] = value
+		history := make(map[int64]bool)
+		history[args.Count] = true
+		Fargs := ForwardArgs{kvs,history}
+		Freply := ForwardReply{}	
+		if pb.currentView.Backup != "" {
+			ok := call(pb.currentView.Backup,"PBServer.ProcessForward",Fargs,&Freply)
+			// fmt.Println(pb.currentView.Backup)
+			if ok {
+				reply.Err = Freply.Err
+			} else {
+				return errors.New("Can't connect Backup")
+			}
+		}
+		if reply.Err == OK{
+			pb.history[args.Count] = true
+			pb.kvs[args.Key] = value
+		}
+	}
 	return nil
 }
 
+func (pb *PBServer) ProcessForward(args *ForwardArgs, reply *ForwardReply) error {
+	// Directly forward the `result` to Backup
+	pb.mu.Lock()
+	defer pb.mu.Unlock()
+	if pb.currentView.Backup != pb.me {
+		reply.Err = ErrWrongServer
+	} else {
+		for k, v := range args.Kvs{
+			pb.kvs[k] = v
+		}
+		for k,v := range args.History{
+			pb.history[k] = v
+		}
+		reply.Err = OK
+	}
+	return nil
+}
 
 //
 // ping the viewserver periodically.
@@ -48,9 +134,30 @@ func (pb *PBServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) error 
 //   transition to new view.
 //   manage transfer of state from primary to new backup.
 //
+
 func (pb *PBServer) tick() {
 
 	// Your code here.
+	// Use while to forward 
+	// What if Backup dead?
+	pb.mu.Lock()
+	defer pb.mu.Unlock()
+	view, err := pb.vs.Ping(pb.currentView.Viewnum)
+
+	if err == nil{
+		// If a server becomes the backup in a new view, the primary should send the kvs
+		if view.Backup != "" && view.Backup != pb.currentView.Backup && view.Primary == pb.me {
+			kvs := pb.kvs
+			args := ForwardArgs{kvs,pb.history}
+			reply := ForwardReply{}
+			ok := false
+			for !ok{
+				ok = call(view.Backup,"PBServer.ProcessForward",args,&reply)
+				fmt.Println("Forward Again")
+			}
+		}
+		pb.currentView = view
+	}
 }
 
 // tell the server to shut itself down.
@@ -84,6 +191,8 @@ func StartServer(vshost string, me string) *PBServer {
 	pb.me = me
 	pb.vs = viewservice.MakeClerk(me, vshost)
 	// Your pb.* initializations here.
+	pb.kvs = make(map[string]string)
+	pb.history = make(map[int64]bool)
 
 	rpcs := rpc.NewServer()
 	rpcs.Register(pb)

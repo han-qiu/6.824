@@ -7,9 +7,12 @@ import "fmt"
 import "crypto/rand"
 import "math/big"
 
+import "time"
+//import "log"
 
 type Clerk struct {
 	vs *viewservice.Clerk
+	primary	string
 	// Your declarations here
 }
 
@@ -74,8 +77,33 @@ func call(srv string, rpcname string,
 func (ck *Clerk) Get(key string) string {
 
 	// Your code here.
+	// OK             = "OK"
+	// ErrNoKey       = "ErrNoKey"
+	// ErrWrongServer = "ErrWrongServer"
+	count := nrand()
+	if ck.primary == "" {
+		ck.primary = ck.vs.Primary()
+	}
+	args := GetArgs{key,count}
 
-	return "???"
+	var reply GetReply
+	for {
+		reply = GetReply{}
+		ok := call(ck.primary, "PBServer.Get", args, &reply)
+		if !ok || reply.Err == ErrWrongServer{
+			// Wrong primary
+			ck.primary = ck.vs.Primary()
+		} else {
+			break
+		}
+		time.Sleep(viewservice.PingInterval)
+	}
+	if reply.Err == ErrNoKey {
+		return ""
+	} else {
+		return reply.Value
+	}
+	// return "???"
 }
 
 //
@@ -84,6 +112,27 @@ func (ck *Clerk) Get(key string) string {
 func (ck *Clerk) PutAppend(key string, value string, op string) {
 
 	// Your code here.
+	// OK             = "OK"
+	// ErrWrongServer = "ErrWrongServer"
+	// DuplicateMsg   = "DuplicateMsg"
+
+	count := nrand()
+	for ck.primary == "" {
+		ck.primary = ck.vs.Primary()
+		fmt.Println("PutAppend Get Primary Again")
+	}
+	args := PutAppendArgs{key,value, op, count}
+	for {
+		var reply PutAppendReply
+		// If not OK: duplicate or not connecting
+		ok := call(ck.primary, "PBServer.PutAppend", args, &reply)
+		if !ok || reply.Err == ErrWrongServer {
+			ck.primary = ck.vs.Primary()
+		} else {
+			break
+		}
+		time.Sleep(viewservice.PingInterval)
+	}
 }
 
 //
