@@ -65,7 +65,6 @@ func (ck *Clerk) Ping(viewnum uint) (View, error) {
 	if ok == false {
 		return View{}, fmt.Errorf("Ping(%v) failed", viewnum)
 	}
-
 	return reply.View, nil
 }
 

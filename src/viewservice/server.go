@@ -37,7 +37,6 @@ func (vs *ViewServer) PromoteBackup() {
 func (vs *ViewServer) Ping(args *PingArgs, reply *PingReply) error {
 	vs.mu.Lock()
 	defer vs.mu.Unlock()
-	fmt.Println("ping", vs.currentView.Primary)
 	// Your code here.
 	if args.Me == vs.currentView.Primary && args.Viewnum == vs.currentView.Viewnum {
 		vs.ack = true
